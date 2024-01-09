@@ -31,6 +31,7 @@
 #include "font.h"
 #include "pins.h"
 #include "sound.h"
+#include "main.h"
 
 
 // see comment at start of main()
@@ -39,6 +40,8 @@ static absolute_time_t bootsel_timeout = 0;
 static const uint32_t bootsel_magic[] = {0xf01681de, 0xbd729b29, 0xd359be7a};
 static uint32_t __uninitialized_ram(bootsel_magic_ram)[count_of(bootsel_magic)];
 static uint16_t ignore_key = HID_KEY_NONE;
+
+static bool forceLCD = true;
 
 
 void apply_settings()
@@ -49,9 +52,6 @@ void apply_settings()
   terminal_apply_settings();
   serial_apply_settings();
 }
-
-
-void wait(uint32_t milliseconds);
 
 void run_tasks(bool processInput)
 {
@@ -172,27 +172,26 @@ int main()
   wait(tuh_inited() ? 1500 : 250);
   
   // if DEFAULTS button and CTRL key is pressed then force DVI
-  if( !gpio_get(PIN_DEFAULTS) )
-    framebuf_init((keyboard_get_current_modifiers() & (KEYBOARD_MODIFIER_LEFTCTRL|KEYBOARD_MODIFIER_RIGHTCTRL))!=0);
-  else
-    {
-      // check F1-F10 keys for startup config
-      while( keyboard_num_keypress()>0 )
-        {
-          uint16_t c = keyboard_read_keypress();
-          if( (c & 0xFF)>=HID_KEY_F1 && (c & 0xFF)<=HID_KEY_F10 && config_load((c & 0xFF)-HID_KEY_F1) )
-            {
-              // apply settings (may have changed)
-              keyboard_apply_settings();
-              serial_apply_settings();
-              // ignore further repeats of Fx key 
-              ignore_key = c;
-              break;
-            }
-        }
-
-      framebuf_init(false);
+  if(forceLCD){
+    framebuf_init(false, true);
+  } else if( !gpio_get(PIN_DEFAULTS) ){
+    framebuf_init((keyboard_get_current_modifiers() & (KEYBOARD_MODIFIER_LEFTCTRL|KEYBOARD_MODIFIER_RIGHTCTRL))!=0, false);  
+  } else {
+    // check F1-F10 keys for startup config
+    while( keyboard_num_keypress()>0 ){
+      uint16_t c = keyboard_read_keypress();
+      if( (c & 0xFF)>=HID_KEY_F1 && (c & 0xFF)<=HID_KEY_F10 && config_load((c & 0xFF)-HID_KEY_F1) ){
+        // apply settings (may have changed)
+        keyboard_apply_settings();
+        serial_apply_settings();
+        // ignore further repeats of Fx key 
+        ignore_key = c;
+        break;
+      }
     }
+
+    framebuf_init(false, false);
+  }
   
   terminal_init();
   sound_init();

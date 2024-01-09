@@ -17,23 +17,26 @@
 // Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 // -----------------------------------------------------------------------------
 
-#include <string.h>
-#include <stdio.h>
-#include "pico/stdlib.h"
-#include "pico/multicore.h"
-#include "hardware/irq.h"
-#include "hardware/vreg.h"
-#include "hardware/structs/bus_ctrl.h"
-#include "dvi.h"
-#include "dvi_serialiser.h"
-#include "common_dvi_pin_configs.h"
-#include "tmds_encode_font_2bpp.h"
+extern "C" {
+  #include <string.h>
+  #include <stdio.h>
+  #include "pico/stdlib.h"
+  #include "pico/multicore.h"
+  #include "hardware/irq.h"
+  #include "hardware/vreg.h"
+  #include "hardware/structs/bus_ctrl.h"
+  #include "dvi.h"
+  #include "dvi_serialiser.h"
+  #include "common_dvi_pin_configs.h"
+  #include "tmds_encode_font_2bpp.h"
 
-#include "pins.h"
+
+  #include "pins.h"
+  #include "font.h"
+  #include "config.h"
+};
 #include "framebuf.h"
 #include "framebuf_dvi.h"
-#include "font.h"
-#include "config.h"
 
 #define DVI_TIMING             dvi_timing_640x480p_60hz
 #define COLOR_PLANE_SIZE_WORDS (MAX_ROWS * MAX_COLS * 4 / 32)
@@ -43,18 +46,14 @@ extern int16_t framebuf_flash_counter;
 extern uint8_t framebuf_flash_color;
 
 struct dvi_inst dvi0;
-static uint16_t *charbuf  = NULL;
-static uint32_t *colorbuf = NULL;
-static uint8_t  *rowattr  = NULL;
 
-
-void framebuf_dvi_charmemset(uint32_t idx, uint8_t c, uint8_t a, uint8_t fg, uint8_t bg, size_t n)
+void framebuf_dvi::charmemset(uint32_t idx, uint8_t c, uint8_t a, uint8_t fg, uint8_t bg, size_t n)
 {
   uint16_t v = c | (a<<8);
   for(size_t i=0; i<n; i++) charbuf[idx+i] = v;
 
-  if( (idx&1)==1 ) { framebuf_dvi_set_color(idx, fg, bg); idx++; n--; }
-  if( (n&1)==1   ) { framebuf_dvi_set_color(idx+n, fg, bg); n--; }
+  if( (idx&1)==1 ) { this->set_color(idx, fg, bg); idx++; n--; }
+  if( (n&1)==1   ) { this->set_color(idx+n, fg, bg); n--; }
   
   if( n>0 )
     for(int plane=0; plane<3; plane++) 
@@ -68,7 +67,7 @@ void framebuf_dvi_charmemset(uint32_t idx, uint8_t c, uint8_t a, uint8_t fg, uin
 }
 
 
-void framebuf_dvi_charmemmove(uint32_t toidx, uint32_t fromidx, size_t n)
+void framebuf_dvi::charmemmove(uint32_t toidx, uint32_t fromidx, size_t n)
 {
   memmove(charbuf+toidx, charbuf+fromidx, n*2);
   if( (fromidx&1)==0 && (toidx&1)==0 && (n&1)==0 )
@@ -83,8 +82,8 @@ void framebuf_dvi_charmemmove(uint32_t toidx, uint32_t fromidx, size_t n)
       uint8_t fg, bg;
       for(int i=0; i<n; i++)
         {
-          framebuf_dvi_get_color(fromidx+i, &fg, &bg);
-          framebuf_dvi_set_color(toidx+i, fg, bg);
+          this->get_color(fromidx+i, &fg, &bg);
+          this->set_color(toidx+i, fg, bg);
         }
     }
   else if( fromidx<toidx )
@@ -92,31 +91,31 @@ void framebuf_dvi_charmemmove(uint32_t toidx, uint32_t fromidx, size_t n)
       uint8_t fg, bg;
       for(int i=n-1; i>=0; i--)
         {
-          framebuf_dvi_get_color(fromidx+i, &fg, &bg);
-          framebuf_dvi_set_color(toidx+i, fg, bg);
+          this->get_color(fromidx+i, &fg, &bg);
+          this->set_color(toidx+i, fg, bg);
         }
     }
 }
 
 
-uint8_t framebuf_dvi_get_char(uint32_t idx)
+uint8_t framebuf_dvi::get_char(uint32_t idx)
 {
   return charbuf[idx] & 255;
 }
 
 
-void framebuf_dvi_set_char(uint32_t idx, uint8_t c)
+void framebuf_dvi::set_char(uint32_t idx, uint8_t c)
 {
   charbuf[idx] = (charbuf[idx] & 0xFF00) | c;
 }
 
 
-uint8_t framebuf_dvi_get_attr(uint32_t idx)
+uint8_t framebuf_dvi::get_attr(uint32_t idx)
 {
   return charbuf[idx] / 256;
 }
 
-void framebuf_dvi_set_attr(uint32_t idx, uint8_t a)
+void framebuf_dvi::set_attr(uint32_t idx, uint8_t a)
 {
   charbuf[idx] = (charbuf[idx] & 0x00FF) | (a<<8);
 }
@@ -124,7 +123,7 @@ void framebuf_dvi_set_attr(uint32_t idx, uint8_t a)
 
 
 // Pixel format RGB222
-void framebuf_dvi_set_color(uint32_t char_index, uint8_t fg, uint8_t bg)
+void framebuf_dvi::set_color(uint32_t char_index, uint8_t fg, uint8_t bg)
 {
   uint bit_index  = char_index % 8 * 4;
   uint word_index = char_index / 8;
@@ -139,7 +138,7 @@ void framebuf_dvi_set_color(uint32_t char_index, uint8_t fg, uint8_t bg)
 }
 
 
-void framebuf_dvi_get_color(uint32_t char_index, uint8_t *fg, uint8_t *bg)
+void framebuf_dvi::get_color(uint32_t char_index, uint8_t *fg, uint8_t *bg)
 {
   *fg = 0;
   *bg = 0;
@@ -156,21 +155,21 @@ void framebuf_dvi_get_color(uint32_t char_index, uint8_t *fg, uint8_t *bg)
 }
 
 
-void framebuf_dvi_set_char_and_attr(uint32_t idx, uint32_t c)
+void framebuf_dvi::set_char_and_attr(uint32_t idx, uint32_t c)
 {
   charbuf[idx] = c & 0xFFFF;
-  framebuf_dvi_set_color(idx, c >> 24, c >> 16);
+  this->set_color(idx, c >> 24, c >> 16);
 }
 
 
-uint32_t framebuf_dvi_get_char_and_attr(uint32_t idx)
+uint32_t framebuf_dvi::get_char_and_attr(uint32_t idx)
 {
   uint8_t fg, bg;
-  framebuf_dvi_get_color(idx, &fg, &bg);
+  this->get_color(idx, &fg, &bg);
   return charbuf[idx] | (bg << 16) | (fg << 24);
 }
 
-
+static framebuf_dvi *dvi_driver = NULL; // annoying and hacky :( fixme
 void __not_in_flash_func(core1_main)() 
 {
   uint32_t *tmdsbuf;
@@ -216,22 +215,22 @@ void __not_in_flash_func(core1_main)()
           uint row = y / char_height;
           
           void (*tmds_encode_font_2bpp)(const uint16_t *, const uint32_t *, uint32_t *, uint, const uint8_t *) = 
-            (rowattr[row] & ROW_ATTR_DBL_WIDTH) ? tmds_encode_font_2bpp_dw : tmds_encode_font_2bpp_sw;
+            (dvi_driver->rowattr[row] & ROW_ATTR_DBL_WIDTH) ? tmds_encode_font_2bpp_dw : tmds_encode_font_2bpp_sw;
 
-          if( rowattr[row] & ROW_ATTR_DBL_HEIGHT_TOP )
+          if( dvi_driver->rowattr[row] & ROW_ATTR_DBL_HEIGHT_TOP )
             {
               for(int plane = 0; plane < 3; ++plane) 
-                tmds_encode_font_2bpp((const uint16_t*)&charbuf[row * MAX_COLS],
-                                      (y<num_y&&framebuf_flash_counter==0) ? &colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
+                tmds_encode_font_2bpp((const uint16_t*)&dvi_driver->charbuf[row * MAX_COLS],
+                                      (y<num_y&&framebuf_flash_counter==0) ? &dvi_driver->colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
                                       tmdsbuf + plane * (FRAME_WIDTH / DVI_SYMBOLS_PER_WORD),
                                       FRAME_WIDTH,
                                       (const uint8_t*)&font[(y % char_height)/2 * 256 * 8]);
             }
-          else if( rowattr[row] & ROW_ATTR_DBL_HEIGHT_BOT )
+          else if( dvi_driver->rowattr[row] & ROW_ATTR_DBL_HEIGHT_BOT )
             {
               for(int plane = 0; plane < 3; ++plane) 
-                tmds_encode_font_2bpp((const uint16_t*)&charbuf[row * MAX_COLS],
-                                      (y<num_y&&framebuf_flash_counter==0) ? &colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
+                tmds_encode_font_2bpp((const uint16_t*)&dvi_driver->charbuf[row * MAX_COLS],
+                                      (y<num_y&&framebuf_flash_counter==0) ? &dvi_driver->colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
                                       tmdsbuf + plane * (FRAME_WIDTH / DVI_SYMBOLS_PER_WORD),
                                       FRAME_WIDTH,
                                       (const uint8_t*)&font[(((y % char_height)+char_height))/2 * 256 * 8]);
@@ -239,8 +238,8 @@ void __not_in_flash_func(core1_main)()
           else
             {
               for(int plane = 0; plane < 3; ++plane) 
-                tmds_encode_font_2bpp((const uint16_t*)&charbuf[row * MAX_COLS],
-                                      (y<num_y&&framebuf_flash_counter==0) ? &colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
+                tmds_encode_font_2bpp((const uint16_t*)&dvi_driver->charbuf[row * MAX_COLS],
+                                      (y<num_y&&framebuf_flash_counter==0) ? &dvi_driver->colorbuf[row * color_plane_words_per_row + plane * color_plane_size_words] : solidcolor,
                                       tmdsbuf + plane * (FRAME_WIDTH / DVI_SYMBOLS_PER_WORD),
                                       FRAME_WIDTH,
                                       (const uint8_t*)&font[(y % char_height) * 256 * 8]);
@@ -252,8 +251,7 @@ void __not_in_flash_func(core1_main)()
 }
 
 
-void framebuf_dvi_init(uint8_t *databuf, uint8_t *ra)
-{
+framebuf_dvi::framebuf_dvi(uint8_t *databuf, uint8_t *ra){
   vreg_set_voltage(VREG_VOLTAGE_1_20);
   sleep_ms(10);
   // Run system at TMDS bit clock
@@ -267,6 +265,7 @@ void framebuf_dvi_init(uint8_t *databuf, uint8_t *ra)
   dvi0.ser_cfg = DVI_DEFAULT_SERIAL_CONFIG;
   dvi_init(&dvi0, next_striped_spin_lock_num(), next_striped_spin_lock_num());
 
+  dvi_driver = this;
   hw_set_bits(&bus_ctrl_hw->priority, BUSCTRL_BUS_PRIORITY_PROC1_BITS);
   multicore_launch_core1(core1_main);
 }

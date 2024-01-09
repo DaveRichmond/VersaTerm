@@ -1,8 +1,9 @@
 add_executable(VersaTerm
 	main.c
-        framebuf.c
+        framebuf.cpp
         framebuf_vga.cpp
-        framebuf_dvi.c
+        framebuf_dvi.cpp
+        framebuf_lcd.cpp
         font.c
         terminal.c
         keyboard.c

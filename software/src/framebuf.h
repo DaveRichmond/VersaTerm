@@ -37,9 +37,19 @@
 #define ROW_ATTR_DBL_HEIGHT_TOP  0x02
 #define ROW_ATTR_DBL_HEIGHT_BOT  0x04
 
-void framebuf_init(bool forceDVI);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    DISP_VGA,
+    DISP_DVI,
+    DISP_LCD
+} framebuf_display_type;
+
+void framebuf_init(bool forceDVI, bool forceLCD);
 void framebuf_apply_settings();
-bool framebuf_is_dvi();
+framebuf_display_type framebuf_type();
 
 void framebuf_set_char(uint8_t column, uint8_t row, uint8_t character);
 uint8_t framebuf_get_char(uint8_t column, uint8_t row);
@@ -69,5 +79,10 @@ void framebuf_set_scroll_delay(uint16_t ms);
 void framebuf_set_screen_size(uint8_t ncols, uint8_t nrows);
 void framebuf_set_screen_inverted(bool invert);
 void framebuf_flash_screen(uint8_t color, uint8_t nframes);
+
+#ifdef __cplusplus
+}; // extern "C"
+#endif
+
 
 #endif

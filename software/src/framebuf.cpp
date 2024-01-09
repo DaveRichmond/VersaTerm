@@ -17,22 +17,27 @@
 // Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301  USA
 // -----------------------------------------------------------------------------
 
-#include <string.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include "hardware/uart.h"
+extern "C" {
+  #include <string.h>
+  #include <stdio.h>
+  #include <stdbool.h>
+  #include "hardware/uart.h"
 
-#include "pins.h"
-#include "font.h"
-#include "config.h"
-#include "sound.h"
-#include "keyboard.h"
+  #include "pins.h"
+  #include "font.h"
+  #include "config.h"
+  #include "sound.h"
+  #include "keyboard.h"
+  #include "main.h"
+};
+
+#include <utility>
 #include "framebuf.h"
+#include "framebuf_driver.h"
 #include "framebuf_dvi.h"
 #include "framebuf_vga.h"
+#include "framebuf_lcd.h"
 
-// defined in main.c
-void wait(uint32_t milliseconds);
 
 static __attribute__((aligned(4))) uint8_t framebuf_data[80*60*4];  // shared data buffer
 static __attribute__((aligned(4))) uint8_t framebuf_rowattr[60];    // row attributes
@@ -42,7 +47,8 @@ uint8_t framebuf_flash_color = 0;
 
 static bool screen_inverted = false, double_size_chars = false;
 static uint8_t num_rows = 0, num_cols = 0, xborder = 0, yborder = 0;
-static bool is_dvi = true;
+static framebuf_display_type current_display_type = DISP_DVI;
+static framebuf_driver *driver = NULL;
 static uint8_t color_map_inv[256];
 static uint16_t scroll_delay = 0;
 
@@ -51,7 +57,7 @@ static uint16_t scroll_delay = 0;
 
 static uint8_t mapcolor(uint8_t color16)
 {
-  return config_get_screen_color(color16, is_dvi);
+  return config_get_screen_color(color16, current_display_type == DISP_DVI);
 }
 
 
@@ -64,104 +70,79 @@ static uint8_t mapcolor_inv(uint8_t fullcolor)
 
 static void charmemset(uint32_t idx, uint8_t c, uint8_t a, uint8_t fg, uint8_t bg, size_t n)
 {
-  if( config_get_screen_monochrome() )
-    {
-      fg = (a & ATTR_BOLD) ? config_get_screen_monochrome_textcolor_bold(is_dvi) : config_get_screen_monochrome_textcolor_normal(is_dvi);
-      bg = config_get_screen_monochrome_backgroundcolor(is_dvi);
-    }
-  else
-    {
-      fg = mapcolor(fg);
-      bg = mapcolor(bg);
-    }
+  if( config_get_screen_monochrome() ){
+    bool is_dvi = current_display_type == DISP_DVI;
+    fg = (a & ATTR_BOLD) ? config_get_screen_monochrome_textcolor_bold(is_dvi) : config_get_screen_monochrome_textcolor_normal(is_dvi);
+    bg = config_get_screen_monochrome_backgroundcolor(is_dvi);
+  } else {
+    fg = mapcolor(fg);
+    bg = mapcolor(bg);
+  }
   
-  if( screen_inverted )
-    { uint8_t c = fg; fg = bg; bg = c; }
+  if( screen_inverted ){ 
+    std::swap(fg, bg);
+  }
 
-  if( is_dvi )
-    return framebuf_dvi_charmemset(idx, c, a, fg, bg, n);
-  else
-    return framebuf_vga_charmemset(idx, c, a, fg, bg, n);
+  driver->charmemset(idx, c, a, fg, bg, n);
 }
 
 
 static void charmemmove(uint32_t toidx, uint32_t fromidx, size_t n)
 {
-  if( is_dvi )
-    return framebuf_dvi_charmemmove(toidx, fromidx, n);
-  else
-    return framebuf_vga_charmemmove(toidx, fromidx, n);
+  driver->charmemmove(toidx, fromidx, n);
 }
 
 
 static void set_char_and_attr(uint32_t idx, uint32_t c)
 {
-  if( is_dvi )
-    framebuf_dvi_set_char_and_attr(idx, c);
-  else
-    framebuf_vga_set_char_and_attr(idx, c);
+  driver->set_char_and_attr(idx, c);
 }
 
 
 static uint32_t get_char_and_attr(uint32_t idx)
 {
-  if( is_dvi )
-    return framebuf_dvi_get_char_and_attr(idx);
-  else
-    return framebuf_vga_get_char_and_attr(idx);
+  return driver->get_char_and_attr(idx);
 }
 
 
 static void set_char(uint32_t idx, uint8_t c)
 {
-  if( is_dvi )
-    framebuf_dvi_set_char(idx, c);
-  else
-    framebuf_vga_set_char(idx, c);
+  driver->set_char(idx, c);
 }
 
 
 static uint8_t get_char(uint32_t idx)
 {
-  if( is_dvi )
-    return framebuf_dvi_get_char(idx);
-  else
-    return framebuf_vga_get_char(idx);
+  return driver->get_char(idx);
 }
 
 
 static uint8_t get_attr(uint32_t idx)
 {
-  if( is_dvi )
-    return framebuf_dvi_get_attr(idx);
-  else
-    return framebuf_vga_get_attr(idx);
+  return driver->get_attr(idx);
 }
 
 
 static void set_fullcolor(uint32_t idx, uint8_t fg, uint8_t bg)
 {
   bool char_inverted = (get_attr(idx) & ATTR_INVERSE)!=0;
-  if( char_inverted != screen_inverted )
-    { uint8_t c = fg; fg = bg; bg = c; }
+  if( char_inverted != screen_inverted ){ 
+    std::swap(fg, bg);
+  }
 
-  if( is_dvi )
-    return framebuf_dvi_set_color(idx, fg, bg);
-  else
-    return framebuf_vga_set_color(idx, fg, bg);
+  driver->set_color(idx, fg, bg);
 }
 
 
 static void get_fullcolor(uint32_t idx, uint8_t *fg, uint8_t *bg)
 {
   bool char_inverted = (get_attr(idx) & ATTR_INVERSE)!=0;
-  if( char_inverted != screen_inverted )
-    { uint8_t *c = fg; fg = bg; bg = c; }
-  
-  if( is_dvi )
-    framebuf_dvi_get_color(idx, fg, bg);
-  else
-    framebuf_vga_get_color(idx, fg, bg);
+  if( char_inverted != screen_inverted ){ 
+    std::swap(fg, bg);
+  }
+
+
+  driver->get_color(idx, fg, bg);
 }
 
 
@@ -174,6 +155,7 @@ static void set_attr(uint32_t idx, uint8_t attr)
       // "bold" setting has changed and we are emulating bold via bright color setting
       if( config_get_screen_monochrome() )
         {
+          bool is_dvi = current_display_type == DISP_DVI;
           if( attr & ATTR_BOLD )
             set_fullcolor(idx, config_get_screen_monochrome_textcolor_bold(is_dvi), config_get_screen_monochrome_backgroundcolor(is_dvi));
           else
@@ -197,11 +179,8 @@ static void set_attr(uint32_t idx, uint8_t attr)
       get_fullcolor(idx, &fg, &bg);
       set_fullcolor(idx,  bg,  fg);
     }
-      
-  if( is_dvi )
-    framebuf_dvi_set_attr(idx, attr);
-  else
-    framebuf_vga_set_attr(idx, attr);
+
+  driver->set_attr(idx, attr);
 }
 
 
@@ -209,6 +188,7 @@ static void set_color(uint32_t idx, uint8_t fg, uint8_t bg)
 {
   if( config_get_screen_monochrome() )
     {
+      bool is_dvi = current_display_type == DISP_DVI;
       if( get_attr(idx) & ATTR_BOLD )
         set_fullcolor(idx, config_get_screen_monochrome_textcolor_bold(is_dvi), config_get_screen_monochrome_backgroundcolor(is_dvi));
       else
@@ -226,13 +206,13 @@ static void set_color(uint32_t idx, uint8_t fg, uint8_t bg)
     }
 }
 
-
+extern "C" // we need to provide these as C linkage
 uint8_t framebuf_get_nrows()
 {
   return double_size_chars ? num_rows/2 : num_rows;
 }
 
-
+extern "C"
 uint8_t framebuf_get_ncols(int row)
 {
   if( row>=0 && row<framebuf_get_nrows() && !double_size_chars && (framebuf_rowattr[row+yborder] & ROW_ATTR_DBL_WIDTH)!=0 )
@@ -241,7 +221,7 @@ uint8_t framebuf_get_ncols(int row)
     return num_cols;
 }
 
-
+extern "C"
 void framebuf_set_char(uint8_t x, uint8_t y, uint8_t c)
 {
   if( double_size_chars ) y *= 2;
@@ -252,7 +232,7 @@ void framebuf_set_char(uint8_t x, uint8_t y, uint8_t c)
     }
 }
 
-
+extern "C"
 uint8_t framebuf_get_char(uint8_t x, uint8_t y)
 {
   if( double_size_chars ) y *= 2;
@@ -262,7 +242,7 @@ uint8_t framebuf_get_char(uint8_t x, uint8_t y)
     return 0;
 }
 
-
+extern "C"
 void framebuf_set_attr(uint8_t x, uint8_t y, uint8_t attr)
 {
   if( double_size_chars ) y *= 2;
@@ -273,7 +253,7 @@ void framebuf_set_attr(uint8_t x, uint8_t y, uint8_t attr)
     }
 }
 
-
+extern "C"
 uint8_t framebuf_get_attr(uint8_t x, uint8_t y)
 {
   if( double_size_chars ) y *= 2;
@@ -283,20 +263,20 @@ uint8_t framebuf_get_attr(uint8_t x, uint8_t y)
     return 0;
 }
 
-
+extern "C"
 void framebuf_set_row_attr(uint8_t row, uint8_t attr)
 {
   if( !double_size_chars && row<framebuf_get_nrows() && framebuf_rowattr[row+yborder]!=attr )
     framebuf_rowattr[row+yborder] = attr;
 }
 
-
+extern "C"
 uint8_t framebuf_get_row_attr(uint8_t y)
 {
   return y<num_rows ? framebuf_rowattr[y+yborder] : 0;
 }
 
-
+extern "C"
 void framebuf_set_color(uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) y *= 2;
@@ -307,7 +287,7 @@ void framebuf_set_color(uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
     }
 }
 
-
+extern "C"
 void framebuf_set_fullcolor(uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) y *= 2;
@@ -318,13 +298,13 @@ void framebuf_set_fullcolor(uint8_t x, uint8_t y, uint8_t fg, uint8_t bg)
     }
 }
 
-
+extern "C"
 void framebuf_fill_screen(char character, uint8_t fg, uint8_t bg)
 {
   framebuf_fill_region(0, 0, framebuf_get_ncols(-1)-1, framebuf_get_nrows()-1, character, fg, bg);
 }
 
-
+extern "C"
 void framebuf_fill_region(uint8_t xs, uint8_t ys, uint8_t xe, uint8_t ye, char c, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) { ys=ys*2; ye=ye*2+1; }
@@ -353,13 +333,13 @@ void framebuf_fill_region(uint8_t xs, uint8_t ys, uint8_t xe, uint8_t ye, char c
     }
 }
 
-
+extern "C"
 void framebuf_scroll_screen(int8_t n, uint8_t fg, uint8_t bg)
 {
   framebuf_scroll_region(0, framebuf_get_nrows()-1, n, fg, bg);
 }
 
-
+extern "C"
 void framebuf_scroll_region(uint8_t start, uint8_t end, int8_t n, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) {start *= 2; end=end*2+1; n *= 2; }
@@ -411,7 +391,7 @@ void framebuf_scroll_region(uint8_t start, uint8_t end, int8_t n, uint8_t fg, ui
     }
 }
 
-
+extern "C"
 void framebuf_insert(uint8_t x, uint8_t y, uint8_t n, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) y *= 2;
@@ -441,7 +421,7 @@ void framebuf_insert(uint8_t x, uint8_t y, uint8_t n, uint8_t fg, uint8_t bg)
     }
 }
 
-
+extern "C"
 void framebuf_delete(uint8_t x, uint8_t y, uint8_t n, uint8_t fg, uint8_t bg)
 {
   if( double_size_chars ) y *= 2;
@@ -470,7 +450,7 @@ void framebuf_delete(uint8_t x, uint8_t y, uint8_t n, uint8_t fg, uint8_t bg)
     }
 }
 
-
+extern "C"
 void framebuf_set_screen_size(uint8_t ncols, uint8_t nrows)
 {
   if( nrows>MAX_ROWS ) nrows = MAX_ROWS;
@@ -502,40 +482,26 @@ void framebuf_set_screen_size(uint8_t ncols, uint8_t nrows)
     }
 }
 
-
+extern "C"
 void framebuf_set_screen_inverted(bool invert)
 {
-  if( invert != screen_inverted )
-    {
-      uint8_t fg, bg;
-      if( is_dvi )
-        {
-          for(uint32_t idx=0; idx<MAX_COLS*MAX_ROWS; idx++)
-            {
-              framebuf_dvi_get_color(idx, &fg, &bg);
-              framebuf_dvi_set_color(idx,  bg,  fg);
-            }
-        }
-      else
-        {
-          for(uint32_t idx=0; idx<MAX_COLS*MAX_ROWS; idx++)
-            {
-              framebuf_vga_get_color(idx, &fg, &bg);
-              framebuf_vga_set_color(idx,  bg,  fg);
-            }
-        }
-      
-      screen_inverted = invert;
+  if( invert != screen_inverted ){
+    uint8_t fg, bg;
+    for(uint32_t idx=0; idx<MAX_COLS*MAX_ROWS; idx++){
+      driver->get_color(idx, &fg, &bg);
+      driver->set_color(idx,  bg,  fg);
     }
+  }
+  screen_inverted = invert;
 }
 
-
+extern "C"
 void framebuf_set_scroll_delay(uint16_t ms)
 {
   scroll_delay = ms;
 }
 
-
+extern "C"
 void framebuf_flash_screen(uint8_t color, uint8_t nframes)
 {
   if( framebuf_flash_counter>0 ) 
@@ -547,13 +513,12 @@ void framebuf_flash_screen(uint8_t color, uint8_t nframes)
     }
 }
 
-
-bool framebuf_is_dvi()
-{
-  return is_dvi;
+extern "C"
+framebuf_display_type framebuf_type(){
+  return current_display_type;
 }
 
-
+extern "C"
 void framebuf_apply_settings()
 {
   font_apply_settings();
@@ -564,30 +529,36 @@ void framebuf_apply_settings()
   scroll_delay = 0;
 }
 
-
-void framebuf_init(bool forceDVI)
+extern "C"
+void framebuf_init(bool forceDVI, bool forceLCD)
 {
   gpio_init(PIN_HDMI_DETECT);
   gpio_set_dir(PIN_HDMI_DETECT, false); // input
 
   if( forceDVI )
-    is_dvi = true;
-  else if( config_get_screen_display()==0 )
-    {
+    current_display_type = DISP_DVI;
+  else if( forceLCD ){
+    current_display_type = DISP_LCD;
+  } else if( config_get_screen_display()==CFG_DISPTYPE_DVI ){
       wait(100); // wait a short time for voltage to stabilize before reading
-      is_dvi = gpio_get(PIN_HDMI_DETECT);
+      current_display_type = gpio_get(PIN_HDMI_DETECT) ? DISP_DVI : DISP_VGA;
+  } else{
+    switch(config_get_screen_display()){
+      case CFG_DISPTYPE_VGA: current_display_type = DISP_VGA; break;
+      case CFG_DISPTYPE_DVI: current_display_type = DISP_DVI; break;
+      case CFG_DISPTYPE_LCD: current_display_type = DISP_LCD; break;
     }
-  else
-    is_dvi = config_get_screen_display()==1;
+  }
   
   font_init();
   memset(framebuf_data, 0, sizeof(framebuf_data));
   screen_inverted = false;
 
-  if( is_dvi )
-    framebuf_dvi_init(framebuf_data, framebuf_rowattr);
-  else
-    framebuf_vga_init(framebuf_data, framebuf_rowattr);
+  switch(framebuf_type()){
+    case DISP_VGA: driver = new framebuf_vga(framebuf_data, framebuf_rowattr); break;
+    case DISP_DVI: driver = new framebuf_dvi(framebuf_data, framebuf_rowattr); break;
+    case DISP_LCD: driver = new framebuf_lcd(framebuf_data, framebuf_rowattr); break;
+  }
 
   framebuf_apply_settings();
 

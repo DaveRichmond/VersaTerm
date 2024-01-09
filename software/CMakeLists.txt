@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
+get_filename_component(SDK_PATH ./lib/pico-sdk ABSOLUTE)
+set(ENV{PICO_SDK_PATH} ${SDK_PATH})
 include(lib/pico-sdk/external/pico_sdk_import.cmake)
 
 project(VersaTerm C CXX ASM)

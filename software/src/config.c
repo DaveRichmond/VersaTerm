@@ -521,10 +521,16 @@ static uint16_t get_current_usbmode()
 
 static uint16_t get_current_displaytype()
 {
-  if( settings.Screen.display==CFG_DISPTYPE_AUTODETECT )
-    return framebuf_is_dvi() ? CFG_DISPTYPE_DVI : CFG_DISPTYPE_VGA;
-  else
+  if( settings.Screen.display==CFG_DISPTYPE_AUTODETECT ){
+    switch(framebuf_type()){
+      case DISP_DVI: return CFG_DISPTYPE_DVI;
+      case DISP_VGA: return CFG_DISPTYPE_VGA;
+      case DISP_LCD: return CFG_DISPTYPE_LCD;
+      default: return CFG_DISPTYPE_DVI;
+    }
+  } else {
     return settings.Screen.display;
+  };
 }
 
 
@@ -795,9 +801,11 @@ uint16_t config_get_audible_bell_duration()
   return settings.Bell.sound_duration;
 }
 
-uint16_t config_get_visual_bell_color()
-{
-  return framebuf_is_dvi() ? settings.Bell.visual_color_dvi : settings.Bell.visual_color_vga;
+uint16_t config_get_visual_bell_color(){
+  switch(framebuf_type()){
+    case DISP_DVI: return settings.Bell.visual_color_dvi;
+    default: return settings.Bell.visual_color_vga; // use vga for lcd too FIXME
+  }
 }
 
 uint8_t config_get_visual_bell_duration()
@@ -1720,7 +1728,7 @@ static int INFLASHFUN color_fn(const struct MenuItemStruct *item, int callType, 
   uint8_t *color = NULL;
 
   // vga/dvi
-  bool dvi = (callType!=IFT_DEFAULT || defaults_force_dvi<0) ? framebuf_is_dvi() : (defaults_force_dvi>0);
+  bool dvi = (callType!=IFT_DEFAULT || defaults_force_dvi<0) ? (framebuf_type() == DISP_DVI) : (defaults_force_dvi>0);
 
   // color number
   int id = find_menu_item_id(MI_FLASHCOLOR, MI_PCOLOR15);
@@ -1847,7 +1855,7 @@ static int INFLASHFUN color16_fn(const struct MenuItemStruct *item, int callType
       if( settings.Terminal.ttype==CFG_TTYPE_PETSCII )
         {
           print("%i \033[27m (%s)", *(item->value), petsciicolornames[*(item->value)]);
-          uint8_t color = framebuf_is_dvi() ? settings.Screen.PetsciiColorDVI.colors[*(item->value)] : settings.Screen.PetsciiColorVGA.colors[*(item->value)];
+          uint8_t color = (framebuf_type() == DISP_DVI) ? settings.Screen.PetsciiColorDVI.colors[*(item->value)] : settings.Screen.PetsciiColorVGA.colors[*(item->value)];
           for(int c=0; c<strlen(petsciicolornames[*(item->value)])+4; c++) framebuf_set_fullcolor(col+2+c, row-1, color, 0);
         }
       else

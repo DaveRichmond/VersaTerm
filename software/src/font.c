@@ -428,7 +428,7 @@ static bool INFLASHFUN set_font_data(uint32_t font_offset, uint32_t bitmapWidth,
 
             uint32_t offset = cr*256*8+cn;
             uint8_t d   = bitmapData[br*bitmapWidth/8+bc];
-            if( framebuf_is_dvi() ) d = reverse_bits(d);
+            if( framebuf_type() == DISP_DVI ) d = reverse_bits(d);
             uint8_t du  = cr==underlineRow ? 255 : d;
             font_blinkoff[font_offset+offset+256*0] = d;
             font_blinkoff[font_offset+offset+256*1] = du;
